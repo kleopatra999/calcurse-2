@@ -133,6 +133,8 @@ static void help_arg(void)
 	      "	print next appointment within upcoming 24 hours "
 	      "and exit. Also given\n\tis the remaining time before this "
 	      "next appointment.\n"
+	      "\n  -1, --one-line\n"
+	      "	print appointments one per line, including date. \n"
 	      "\n  -r[num], --range[=num]\n"
 	      "	print events and appointments for the [num] number of days"
 	      "\n\tand exit. If no [num] is given, a range of 1 day is considered.\n"
@@ -293,7 +295,7 @@ static void arg_print_date(long date)
 static int
 app_arg(int add_line, struct date *day, long date, const char *fmt_apt,
 	const char *fmt_rapt, const char *fmt_ev, const char *fmt_rev,
-	regex_t * regex)
+	regex_t * regex, int oflag)
 {
 	if (date == 0)
 		date = get_sec_date(*day);
@@ -301,9 +303,11 @@ app_arg(int add_line, struct date *day, long date, const char *fmt_apt,
 	int n = day_store_items(date, NULL, NULL, regex);
 
 	if (n > 0) {
-		if (add_line)
-			fputs("\n", stdout);
-		arg_print_date(date);
+		if (!oflag) {
+			if (add_line)
+				fputs("\n", stdout);
+			arg_print_date(date);
+		}
 		day_write_stdout(date, fmt_apt, fmt_rapt, fmt_ev, fmt_rev);
 	}
 
@@ -318,7 +322,7 @@ app_arg(int add_line, struct date *day, long date, const char *fmt_apt,
 static void
 display_app(struct tm *t, int numdays, int add_line, const char *fmt_apt,
 	    const char *fmt_rapt, const char *fmt_ev, const char *fmt_rev,
-	    regex_t * regex)
+	    regex_t * regex, int oflag)
 {
 	int i, app_found;
 	struct date day;
@@ -329,7 +333,7 @@ display_app(struct tm *t, int numdays, int add_line, const char *fmt_apt,
 		day.yyyy = t->tm_year + 1900;
 		app_found =
 		    app_arg(add_line, &day, 0, fmt_apt, fmt_rapt, fmt_ev,
-			    fmt_rev, regex);
+			    fmt_rev, regex, oflag);
 		if (app_found)
 			add_line = 1;
 		t->tm_mday++;
@@ -344,7 +348,7 @@ display_app(struct tm *t, int numdays, int add_line, const char *fmt_apt,
 static void
 date_arg(const char *ddate, int add_line, const char *fmt_apt,
 	 const char *fmt_rapt, const char *fmt_ev, const char *fmt_rev,
-	 regex_t * regex)
+	 regex_t * regex, int oflag)
 {
 	struct date day;
 	static struct tm t;
@@ -363,13 +367,13 @@ date_arg(const char *ddate, int add_line, const char *fmt_apt,
 		timer = time(NULL);
 		localtime_r(&timer, &t);
 		display_app(&t, atoi(ddate), add_line, fmt_apt, fmt_rapt,
-			    fmt_ev, fmt_rev, regex);
+			    fmt_ev, fmt_rev, regex, oflag);
 	} else {
 		/* A date was entered. */
 		if (parse_date(ddate, conf.input_datefmt, (int *)&day.yyyy,
 			       (int *)&day.mm, (int *)&day.dd, NULL)) {
 			app_arg(add_line, &day, 0, fmt_apt, fmt_rapt,
-				fmt_ev, fmt_rev, regex);
+				fmt_ev, fmt_rev, regex, oflag);
 		} else {
 			fputs(_("Argument to the '-d' flag is not valid\n"),
 			      stderr);
@@ -392,7 +396,8 @@ date_arg(const char *ddate, int add_line, const char *fmt_apt,
 static void
 date_arg_extended(const char *startday, const char *range, int add_line,
 		  const char *fmt_apt, const char *fmt_rapt,
-		  const char *fmt_ev, const char *fmt_rev, regex_t * regex)
+		  const char *fmt_ev, const char *fmt_rev, regex_t * regex,
+		  int oflag)
 {
 	int numdays = 1, error = 0;
 	static struct tm t;
@@ -423,7 +428,7 @@ date_arg_extended(const char *startday, const char *range, int add_line,
 	}
 	if (!error) {
 		display_app(&t, numdays, add_line, fmt_apt, fmt_rapt,
-			    fmt_ev, fmt_rev, regex);
+			    fmt_ev, fmt_rev, regex, oflag);
 	} else {
 		fputs(_("Argument is not valid\n"), stderr);
 		fprintf(stdout,
@@ -450,6 +455,7 @@ int parse_args(int argc, char **argv)
 	int gflag = 0;		/* -g: run garbage collector */
 	int iflag = 0;		/* -i: import data */
 	int nflag = 0;		/* -n: print next appointment */
+	int oflag = 0;		/* -1: print one line per appointment */
 	int rflag = 0;		/* -r: specify the range of days to consider */
 	int sflag = 0;		/* -s: specify the first day to consider */
 	int Sflag = 0;		/* -S: specify a regex to search for */
@@ -463,6 +469,12 @@ int parse_args(int argc, char **argv)
 	const char *fmt_rev = " * %m\n";
 	const char *fmt_todo = "%p. %m\n";
 
+	/* Default format strings for --one-line */
+        char fmt_apt_date[BUFSIZ], fmt_rapt_date[BUFSIZ];
+	int fmt_apt_set = 0;	/* Track which apt. formats have been set.
+				 * If a fmt has not been set, we reset it
+				 * when setting -1/--one-line */
+	int fmt_rapt_set = 0;
 	int tnum = 0, xfmt = 0, non_interactive = 0, multiple_flag =
 	    0, load_data = 0;
 	const char *ddate = "", *cfile = NULL, *range = NULL, *startday =
@@ -476,7 +488,7 @@ int parse_args(int argc, char **argv)
 		STATUS_OPT = CHAR_MAX + 1
 	};
 
-	static const char *optstr = "ghvnNax::t::d:c:r::s::S:D:i:";
+	static const char *optstr = "ghvnNax::t::d:c:r::s::S:D:i:1";
 
 	struct option longopts[] = {
 		{"appointment", no_argument, NULL, 'a'},
@@ -488,6 +500,7 @@ int parse_args(int argc, char **argv)
 		{"import", required_argument, NULL, 'i'},
 		{"next", no_argument, NULL, 'n'},
 		{"note", no_argument, NULL, 'N'},
+		{"one-line", no_argument, NULL, '1'},
 		{"range", optional_argument, NULL, 'r'},
 		{"startday", optional_argument, NULL, 's'},
 		{"search", required_argument, NULL, 'S'},
@@ -607,11 +620,27 @@ int parse_args(int argc, char **argv)
 				xfmt = IO_EXPORT_ICAL;
 			}
 			break;
+                case '1':
+			oflag = 1;
+			if (!fmt_apt_set || !fmt_rapt_set) {
+				io_init(cfile, datadir);
+				vars_init();
+				config_load();	/* To get output date format. */
+				sprintf(fmt_apt_date,"%%(start:%s)",conf.output_datefmt);
+				strncat(fmt_apt_date," - %S -> %E : %m\n",BUFSIZ-strlen(fmt_apt_date));
+				if ( !fmt_apt_set )
+					fmt_apt = fmt_apt_date;
+				if ( !fmt_rapt_set )
+					fmt_rapt = fmt_apt_date;
+			}
+			break;
 		case OPT_FMT_APT:
 			fmt_apt = optarg;
+			fmt_apt_set = 1;
 			break;
 		case OPT_FMT_RAPT:
 			fmt_rapt = optarg;
+			fmt_rapt_set = 1;
 			break;
 		case OPT_FMT_EV:
 			fmt_ev = optarg;
@@ -716,13 +745,13 @@ int parse_args(int argc, char **argv)
 				if (dflag)
 					date_arg(ddate, add_line, fmt_apt,
 						 fmt_rapt, fmt_ev, fmt_rev,
-						 preg);
+						 preg, oflag);
 				if (rflag || sflag)
 					date_arg_extended(startday, range,
 							  add_line,
 							  fmt_apt,
 							  fmt_rapt, fmt_ev,
-							  fmt_rev, preg);
+							  fmt_rev, preg, oflag);
 				non_interactive = 1;
 			} else if (aflag) {
 				struct date day;
@@ -734,7 +763,7 @@ int parse_args(int argc, char **argv)
 				io_load_app();
 				day.dd = day.mm = day.yyyy = 0;
 				app_arg(add_line, &day, 0, fmt_apt,
-					fmt_rapt, fmt_ev, fmt_rev, preg);
+					fmt_rapt, fmt_ev, fmt_rev, preg, oflag);
 				non_interactive = 1;
 			}
 		} else {
